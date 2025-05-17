@@ -1,99 +1,100 @@
 import streamlit as st
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+import google.generativeai as genai
 from PIL import Image
 from io import BytesIO
-import base64
-import google.generativeai as genai
 import os
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-import uuid
 
-# Configure Google API key from Streamlit secrets
-genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+# Configure Google Generative AI API
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-
-
-# Initialize session state for chat history and image display
-if 'chat_history' not in st.session_state:
+# Initialize session state for chat history
+if "chat_history" not in st.session_state:
     st.session_state.chat_history = [SystemMessage(content="You are a helpful assistant.")]
-if 'generated_images' not in st.session_state:
-    st.session_state.generated_images = []
+
+# Initialize LangChain LLM for chat
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
+
+# Initialize generative AI client for image generation
+genai_client = genai.GenerativeAI()
 
 # Streamlit app title
-st.title("Chat with AI Assistant (Text & Image Generation)")
+st.title("Gemini Chat and Image Generation App")
+
+# Chat interface
+st.subheader("Chat with Gemini")
+user_input = st.text_input("Your message:", key="chat_input", placeholder="Type your message or 'quit' to clear chat...")
+
+if st.button("Send Message"):
+    if user_input:
+        if user_input.lower() == "quit":
+            st.session_state.chat_history = [SystemMessage(content="You are a helpful assistant.")]
+            st.success("Chat history cleared!")
+        else:
+            # Add user message to chat history
+            st.session_state.chat_history.append(HumanMessage(content=user_input))
+            
+            try:
+                # Get AI response
+                result = llm.invoke(st.session_state.chat_history)
+                st.session_state.chat_history.append(AIMessage(content=result.content))
+            except Exception as e:
+                st.error(f"Error in chat: {str(e)}")
 
 # Display chat history
+st.write("### Chat History")
 for message in st.session_state.chat_history:
-    if isinstance(message, HumanMessage):
-        with st.chat_message("user"):
-            st.write(message.content)
-    elif isinstance(message, AIMessage):
-        with st.chat_message("assistant"):
-            st.write(message.content)
+    if isinstance(message, SystemMessage):
+        continue
+    role = "You" if isinstance(message, HumanMessage) else "AI"
+    with st.chat_message(role.lower()):
+        st.write(message.content)
 
-# Display previously generated images
-if st.session_state.generated_images:
-    st.subheader("Generated Images")
-    for img_path, prompt in st.session_state.generated_images:
-        st.image(img_path, caption=f"Generated for: {prompt}", use_column_width=True)
-
-# Input box for user message
-user_input = st.chat_input("Type your message here (e.g., 'bombardiro crocodilo')...")
-
-if user_input:
-    if user_input.lower() == "quit":
-        # Reset chat history and images
-        st.session_state.chat_history = [SystemMessage(content="You are a helpful assistant.")]
-        st.session_state.generated_images = []
-        st.experimental_rerun()
-    else:
-        # Add user message to chat history
-        st.session_state.chat_history.append(HumanMessage(content=user_input))
-        
-        # Display user message immediately
-        with st.chat_message("user"):
-            st.write(user_input)
-        
-        # Generate response from Google Generative AI
+# Image generation interface
+st.subheader("Generate an Image")
+image_prompt = st.text_input("Enter prompt for image generation:", key="image_input", placeholder="e.g., 'bombardiro crocodilo'")
+if st.button("Generate Image"):
+    if image_prompt:
         try:
-            response = client.generate_content(
+            # Generate image
+            response = genai_client.generate_content(
                 model="gemini-2.0-flash-preview-image-generation",
-                contents=user_input,
+                contents=image_prompt,
                 generation_config={
-                    "response_mime_types": ["text/plain", "image/png"]
+                    "response_modalities": ["TEXT", "IMAGE"]
                 }
             )
             
             # Process response
-            text_response = ""
-            image_path = None
             for part in response.candidates[0].content.parts:
-                if hasattr(part, 'text') and part.text:
-                    text_response += part.text
-                elif hasattr(part, 'inline_data') and part.inline_data:
-                    # Decode and save the image
-                    image_data = base64.b64decode(part.inline_data.data)
+                if part.text:
+                    st.write("**Generated Text:**")
+                    st.write(part.text)
+                if part.inline_data:
+                    # Decode and display image
+                    image_data = part.inline_data.data
                     image = Image.open(BytesIO(image_data))
-                    image_path = f"generated_image_{uuid.uuid4()}.png"
-                    image.save(image_path)
-                    st.session_state.generated_images.append((image_path, user_input))
-            
-            # Display text response
-            if text_response:
-                with st.chat_message("assistant"):
-                    st.write(text_response)
-                st.session_state.chat_history.append(AIMessage(content=text_response))
-            
-            # Refresh to show new image
-            if image_path:
-                st.experimental_rerun()
-                
+                    st.image(image, caption="Generated Image", use_column_width=True)
+                    
+                    # Save image for download
+                    image.save("generated_image.png")
+                    with open("generated_image.png", "rb") as file:
+                        st.download_button(
+                            label="Download Image",
+                            data=file,
+                            file_name="generated_image.png",
+                            mime="image/png",
+                            key="download_button"
+                        )
         except Exception as e:
-            with st.chat_message("assistant"):
-                st.error(f"Error generating response: {str(e)}")
-            st.session_state.chat_history.append(AIMessage(content=f"Error: {str(e)}"))
+            st.error(f"Error generating image: {str(e)}")
 
-# Clean up old images (optional, to manage disk space)
-if len(st.session_state.generated_images) > 10:
-    old_image_path, _ = st.session_state.generated_images.pop(0)
-    if os.path.exists(old_image_path):
-        os.remove(old_image_path)
+# Instructions
+st.markdown("""
+### Instructions
+- **Chat**: Enter a message in the chat input and click "Send Message". Type 'quit' to clear the chat history.
+- **Image Generation**: Enter a prompt in the image input and click "Generate Image" to create an image.
+- **Download**: Use the download button to save generated images.
+- **Note**: Ensure `GOOGLE_API_KEY` is set in your environment variables or Streamlit secrets.
+""")
