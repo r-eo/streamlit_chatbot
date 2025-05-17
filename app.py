@@ -10,8 +10,7 @@ import uuid
 # Configure Google API key from Streamlit secrets
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# Initialize the Google Generative AI client
-client = genai.GenerativeAI()
+
 
 # Initialize session state for chat history and image display
 if 'chat_history' not in st.session_state:
