@@ -5,6 +5,9 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 import base64
 from PIL import Image
 from io import BytesIO
+import os
+
+os.envirom["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 
 # Set page config
 st.set_page_config(page_title="Gemini Chat & Image Generation", page_icon="🎨", layout="wide")
@@ -24,12 +27,8 @@ if "messages" not in st.session_state:
 if "generated_images" not in st.session_state:
     st.session_state.generated_images = []
 
-# API key input
-api_key = st.sidebar.text_input("Enter Google API Key", type="password")
 
-# Configure API
-if api_key:
-    genai.configure(api_key=api_key)
+
 
 # App mode selection
 app_mode = st.sidebar.radio("Choose Mode", ["Chat", "Image Generation"])
