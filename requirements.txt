@@ -4,3 +4,4 @@ google.generativeai
 pillow
 stability-sdk
 langchain
+google-genai
