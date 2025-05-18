@@ -1,104 +1,105 @@
 import streamlit as st
-import google.generativeai as genai
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.output_parsers import StrOutputParser
+from google.ai.generativelanguage_v1beta.types import GenerateContentResponse
+from google.ai import generativelanguage as genai
+from PIL import Image
 from io import BytesIO
-from PIL import Image # To potentially inspect or save image if needed, not strictly for display
+import base64
 
-# Set page config
-st.set_page_config(page_title="Gemini Image Generation", page_icon="🖼️", layout="wide")
+# Initialize Streamlit page
+st.set_page_config(page_title="Gemini Chat + Image Gen", layout="wide")
+st.title("💬 Gemini Chat + 🖼️ Image Generation")
 
-# App title
-st.title("Gemini 2.0 - Image Generation")
+# Session state initialization
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = [
+        SystemMessage(content="You are a helpful assistant.")
+    ]
 
-# Load API key from Streamlit secrets
-try:
-    api_key = st.secrets["GOOGLE_API_KEY"]
-except KeyError:
-    st.error("Google API Key not found in Streamlit secrets. Please add 'GOOGLE_API_KEY' to your secrets.")
-    st.stop()
-
-# Configure API
-if api_key:
-    genai.configure(api_key=api_key)
+# Load API key from secrets or input
+if "GOOGLE_API_KEY" not in st.secrets:
+    st.sidebar.warning("API Key not found in secrets.toml")
+    google_api_key = st.sidebar.text_input("Enter Google API Key:", type="password")
 else:
-    st.error("Google API Key is not configured.")
+    google_api_key = st.secrets["GOOGLE_API_KEY"]
+
+if not google_api_key:
+    st.warning("Please provide an API key to proceed.")
     st.stop()
 
-# --- Image Generation Mode ---
-st.header("Generate Images with Gemini")
+# LangChain LLM for regular chat
+llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=google_api_key)
+parser = StrOutputParser()
 
-# Text input for the image generation prompt
-prompt = st.text_area("Enter a prompt to generate an image:", height=100, placeholder="e.g., A futuristic cityscape at sunset with flying cars")
+# Native Gemini Client for image generation
+client = genai.Client(api_key=google_api_key)
 
-if st.button("Generate Image"):
-    if not prompt:
-        st.warning("Please enter a prompt.")
-    else:
-        with st.spinner("Generating image... Please wait."):
+# Display chat history
+for message in st.session_state.chat_history:
+    if isinstance(message, HumanMessage):
+        with st.chat_message("human"):
+            st.markdown(message.content)
+    elif isinstance(message, AIMessage):
+        with st.chat_message("assistant"):
+            st.markdown(message.content)
+
+# User input
+user_input = st.chat_input("Type your message...")
+
+if user_input:
+    # Add user message
+    st.session_state.chat_history.append(HumanMessage(content=user_input))
+    with st.chat_message("human"):
+        st.markdown(user_input)
+
+    # Check if it's an image generation request
+    if any(keyword in user_input.lower() for keyword in ["generate image", "create image", "draw image"]):
+        with st.spinner("Generating image..."):
             try:
-                # Select the model capable of image generation.
-                # 'gemini-2.0-flash-preview-image-generation' is one such model.
-                # Always check the Google AI documentation for the latest recommended models.
-                model = genai.GenerativeModel('gemini-2.0-flash-preview-image-generation')
-
-                # Generate content with response_modalities specified
-                # This model can return both text and image, so we request both.
-                # Image-only output might not be supported directly; the model often provides context.
-                response = model.generate_content(
-                    contents=[prompt], # The prompt
-                    generation_config=genai.types.GenerationConfig(
-                        response_modalities=['IMAGE', 'TEXT'] # Requesting image and text output
+                # Call Gemini 2.0 Flash (image generation model)
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash-preview-image-generation",
+                    contents=user_input,
+                    config=genai.types.GenerateContentConfig(
+                        response_modalities=["TEXT", "IMAGE"]
                     )
                 )
 
-                # Process the response to extract image and text
-                generated_image_bytes = None
-                generated_text_parts = []
+                # Process parts of response
+                ai_response = ""
+                image_found = False
+                for part in response.candidates[0].content.parts:
+                    if part.text:
+                        ai_response += part.text + "\n\n"
+                    elif part.inline_data:
+                        image_bytes = part.inline_data.data
+                        image = Image.open(BytesIO(image_bytes))
+                        st.image(image, caption="Generated Image", use_column_width=True)
+                        image.save("generated_image.png")
+                        image_found = True
 
-                if response.parts:
-                    for part in response.parts:
-                        if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                            generated_image_bytes = part.inline_data.data
-                        elif part.text:
-                            generated_text_parts.append(part.text)
-                else:
-                    # Fallback if response.parts is empty but text might be directly available
-                    if response.text:
-                         generated_text_parts.append(response.text)
+                if ai_response.strip():
+                    st.markdown(f"**Assistant:**\n{ai_response}")
+                if not ai_response and not image_found:
+                    st.markdown("No response received.")
 
-
-                st.subheader("Generation Result:")
-                if generated_image_bytes:
-                    st.image(generated_image_bytes, caption="Generated Image")
-                else:
-                    st.warning("No image was generated. The model might have responded with text only.")
-
-                if generated_text_parts:
-                    st.write("**Accompanying Text from Model:**")
-                    st.write("\n".join(generated_text_parts))
-                elif not generated_image_bytes: # If no image and no text parts, show full response text if any
-                     if hasattr(response, 'text') and response.text:
-                        st.write(response.text)
-                     else:
-                        st.error("The model did not return any recognizable content (image or text).")
-
+                # Save AI message to chat history
+                st.session_state.chat_history.append(AIMessage(content=ai_response))
 
             except Exception as e:
-                st.error(f"An error occurred during image generation: {str(e)}")
-                # You might want to print the full response for debugging if an error occurs
-                # st.error(f"Full response: {response}")
+                st.error(f"Error generating image: {e}")
 
+    else:
+        # Regular chat response
+        with st.spinner("Thinking..."):
+            try:
+                result = llm.invoke(st.session_state.chat_history)
+                ai_response = parser.invoke(result)
+                st.session_state.chat_history.append(AIMessage(content=ai_response))
 
-# Instructions in sidebar
-with st.sidebar:
-    st.markdown("## Instructions")
-    st.markdown("1. Enter a descriptive prompt for the image you want to generate.")
-    st.markdown("2. Click 'Generate Image'.")
-    st.markdown("3. The generated image and any accompanying text will appear.")
-    st.markdown("---")
-    st.markdown("**Note on API Usage & Costs:**")
-    st.markdown(
-        "Image generation uses the Gemini API. While a free tier may be available, "
-        "extensive use can incur costs. Please check Google's official Gemini API pricing "
-        "for details on free quotas and charges."
-    )
-    st.markdown("API key is loaded from Streamlit secrets.")
+                with st.chat_message("assistant"):
+                    st.markdown(ai_response)
+            except Exception as e:
+                st.error(f"Error invoking model: {e}")
