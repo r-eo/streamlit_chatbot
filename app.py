@@ -5,6 +5,8 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from PIL import Image
 from io import BytesIO
 import base64
+from stability_sdk import client
+import stability_sdk.interfaces.gooseai.generation.generation_pb2 as generation
 
 # Set page config
 st.set_page_config(page_title="Gemini Chat & Image Generation", page_icon="🎨", layout="wide")
@@ -24,18 +26,26 @@ if "messages" not in st.session_state:
 if "generated_images" not in st.session_state:
     st.session_state.generated_images = []
 
-# Load API key from Streamlit secrets
+# Load API keys from Streamlit secrets
 try:
-    api_key = st.secrets["GOOGLE_API_KEY"]
-except KeyError:
-    st.error("Google API Key not found in Streamlit secrets. Please add 'GOOGLE_API_KEY' to your secrets.")
+    google_api_key = st.secrets["GOOGLE_API_KEY"]
+    stability_api_key = st.secrets["STABILITY_API_KEY"]
+except KeyError as e:
+    st.error(f"API Key not found in Streamlit secrets: {str(e)}. Please add 'GOOGLE_API_KEY' and 'STABILITY_API_KEY' to your secrets.")
     st.stop()
 
 # Configure Google API for chat
-genai.configure(api_key=api_key)
+genai.configure(api_key=google_api_key)
 
 # Initialize the model for chat
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key)
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=google_api_key)
+
+# Configure Stability AI API for image generation
+stability_api = client.StabilityInference(
+    key=stability_api_key,
+    verbose=True,
+    engine="stable-diffusion-xl-1024-v1-0",  # Use the latest Stable Diffusion model
+)
 
 # App mode selection
 app_mode = st.sidebar.radio("Choose Mode", ["Chat", "Image Generation"])
@@ -95,44 +105,83 @@ if app_mode == "Chat":
 
 # Image Generation Mode
 else:
-    st.header("Image Generation with Gemini 2.0 Flash")
+    st.header("Image Generation with Stable Diffusion")
     
-    # Explain why image generation isn't possible
-    st.warning(
-        "Image generation is not supported by the Google Generative AI library as of May 2025. "
-        "The requested model 'gemini-2.0-flash-preview-image-generation' does not exist in the "
-        "google.generativeai library, and Google AI does not provide a public API for text-to-image "
-        "generation in this context. To proceed with image generation, consider using an alternative provider "
-        "like Stability AI (Stable Diffusion) or OpenAI (DALL-E). Would you like to switch to one of these?"
-    )
-
     # Image generation settings
     img_width = st.slider("Image Width", min_value=256, max_value=1024, value=512, step=64)
     img_height = st.slider("Image Height", min_value=256, max_value=1024, value=512, step=64)
+    num_images = st.slider("Number of Images", min_value=1, max_value=4, value=1)
     image_prompt = st.text_area("Describe the image you want to generate (e.g., 'bombardiro crocodilo'):", height=100)
 
+    # Function to generate images using Stability AI
+    def generate_images(prompt, width, height, samples=1):
+        try:
+            images = []
+            for _ in range(samples):
+                # Generate image using Stability AI
+                response = stability_api.generate(
+                    prompt=prompt,
+                    width=width,
+                    height=height,
+                    steps=50,  # Number of diffusion steps (higher for better quality)
+                    cfg_scale=7.0,  # How closely the image follows the prompt
+                    samples=1,  # Number of images per generation
+                )
+                
+                # Process the response
+                for resp in response:
+                    for artifact in resp.artifacts:
+                        if artifact.type == generation.ARTIFACT_IMAGE:
+                            image = Image.open(BytesIO(artifact.binary))
+                            images.append(image)
+                        else:
+                            st.warning("Non-image artifact received.")
+                            
+            return images
+        except Exception as e:
+            st.error(f"Image generation error: {str(e)}")
+            return []
+
     # Generate button
-    if st.button("Generate Image"):
+    if st.button("Generate Image(s)"):
         if not image_prompt:
             st.warning("Please enter a description for the image.")
         else:
-            st.error(
-                "Image generation is not available with Google AI in this library. "
-                "The model 'gemini-2.0-flash-preview-image-generation' is not supported."
-            )
+            with st.spinner(f"Generating {num_images} image(s)..."):
+                images = generate_images(image_prompt, img_width, img_height, num_images)
+                if images:
+                    # Store the generated images
+                    new_images = []
+                    for img in images:
+                        buffered = BytesIO()
+                        img.save(buffered, format="PNG")
+                        img_str = base64.b64encode(buffered.getvalue()).decode()
+                        new_images.append({
+                            "image": img_str,
+                            "prompt": image_prompt,
+                            "dimensions": f"{img_width}x{img_height}"
+                        })
+                    
+                    st.session_state.generated_images = new_images + st.session_state.generated_images
 
-    # Display generated images (placeholder for when generation is supported)
+    # Display generated images
     if st.session_state.generated_images:
         st.subheader("Generated Images")
-        for i, img_data in enumerate(st.session_state.generated_images):
-            st.image(
-                BytesIO(base64.b64decode(img_data["image"])),
-                caption=f"Prompt: {img_data['prompt']} ({img_data['dimensions']})",
-                use_column_width=True
-            )
-            if st.button(f"Remove Image {i+1}", key=f"remove_{i}"):
-                st.session_state.generated_images.pop(i)
-                st.rerun()
+        # Create rows with 2 images per row
+        for i in range(0, len(st.session_state.generated_images), 2):
+            cols = st.columns(2)
+            for j in range(2):
+                if i+j < len(st.session_state.generated_images):
+                    img_data = st.session_state.generated_images[i+j]
+                    with cols[j]:
+                        st.image(
+                            BytesIO(base64.b64decode(img_data["image"])),
+                            caption=f"Prompt: {img_data['prompt']} ({img_data['dimensions']})",
+                            use_column_width=True
+                        )
+                        if st.button(f"Remove", key=f"remove_{i+j}"):
+                            st.session_state.generated_images.pop(i+j)
+                            st.rerun()
 
 # Instructions in sidebar
 with st.sidebar:
@@ -143,11 +192,11 @@ with st.sidebar:
         st.markdown("2. Type 'quit' to end the session and start a new one.")
         st.markdown("3. Click 'Clear Chat' to reset the conversation.")
     else:
-        st.markdown("1. Adjust image size settings.")
+        st.markdown("1. Adjust image size and number settings.")
         st.markdown("2. Enter a prompt describing the image.")
-        st.markdown("3. Note: Image generation is not supported by Google AI in this library.")
+        st.markdown("3. Click 'Generate Image(s)' to create images.")
+        st.markdown("4. Images are stored in your session until cleared.")
     
     st.markdown("---")
-    st.markdown("**Note:** API key is loaded from Streamlit secrets.")
-
+    st.markdown("**Note:** API keys are loaded from Streamlit secrets.")
 
