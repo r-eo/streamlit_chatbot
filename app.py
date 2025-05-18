@@ -24,8 +24,12 @@ if "messages" not in st.session_state:
 if "generated_images" not in st.session_state:
     st.session_state.generated_images = []
 
-# API key input
-api_key = st.sidebar.text_input("Enter Google API Key", type="password")
+# Load API key from Streamlit secrets
+try:
+    api_key = st.secrets["GOOGLE_API_KEY"]
+except KeyError:
+    st.error("Google API Key not found in Streamlit secrets. Please add 'GOOGLE_API_KEY' to your secrets.")
+    st.stop()
 
 # Configure API
 if api_key:
@@ -120,31 +124,27 @@ if app_mode == "Chat":
         # Add to langchain chat history
         st.session_state.chat_history.append(HumanMessage(content=user_input))
         
-        # Check if API key is provided
-        if not api_key:
-            st.error("Please enter your Google API key in the sidebar.")
-        else:
-            try:
-                # Create progress/thinking indicator
-                with st.chat_message("assistant"):
-                    with st.spinner("Thinking..."):
-                        # Initialize the model and get response
-                        llm = ChatGoogleGenerativeAI(
-                            model=model,
-                            google_api_key=api_key
-                        )
-                        result = llm.invoke(st.session_state.chat_history)
-                        
-                        # Add to langchain chat history
-                        st.session_state.chat_history.append(AIMessage(content=result.content))
-                        
-                        # Add to displayed messages
-                        st.session_state.messages.append({"role": "assistant", "content": result.content})
-                        
-                        # Display the response
-                        st.write(result.content)
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
+        # Check if API key is configured correctly
+        try:
+            # Create progress/thinking indicator
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    # Initialize the model and get response
+                    llm = ChatGoogleGenerativeAI(
+                        model=model,
+                    )
+                    result = llm.invoke(st.session_state.chat_history)
+                    
+                    # Add to langchain chat history
+                    st.session_state.chat_history.append(AIMessage(content=result.content))
+                    
+                    # Add to displayed messages
+                    st.session_state.messages.append({"role": "assistant", "content": result.content})
+                    
+                    # Display the response
+                    st.write(result.content)
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
 else:
     # Image Generation Mode
     st.header("Image Generation with Gemini 2.0")
@@ -154,9 +154,7 @@ else:
     
     # Generate button
     if st.button("Generate Image(s)"):
-        if not api_key:
-            st.error("Please enter your Google API key in the sidebar.")
-        elif not image_prompt:
+        if not image_prompt:
             st.warning("Please enter a description for the image.")
         else:
             with st.spinner(f"Generating {num_images} image(s)..."):
@@ -199,17 +197,16 @@ else:
 # Instructions in sidebar
 with st.sidebar:
     st.markdown("## Instructions")
-    st.markdown("1. Enter your Google API key in the sidebar")
     
     if app_mode == "Chat":
-        st.markdown("2. Select the Gemini model you want to use")
-        st.markdown("3. Type your message in the chat input")
-        st.markdown("4. Click 'Clear Chat' to start a new conversation")
+        st.markdown("1. Select the Gemini model you want to use")
+        st.markdown("2. Type your message in the chat input")
+        st.markdown("3. Click 'Clear Chat' to start a new conversation")
     else:
-        st.markdown("2. Adjust image size and number settings")
-        st.markdown("3. Enter a detailed prompt describing the image")
-        st.markdown("4. Click 'Generate Image(s)' to create images")
-        st.markdown("5. Images are stored in your session until cleared")
+        st.markdown("1. Adjust image size and number settings")
+        st.markdown("2. Enter a detailed prompt describing the image")
+        st.markdown("3. Click 'Generate Image(s)' to create images")
+        st.markdown("4. Images are stored in your session until cleared")
     
     st.markdown("---")
-    st.markdown("**Note:** Image generation requires access to the Gemini 2.0 models with image generation capabilities.")
+    st.markdown("**Note:** API key is loaded from Streamlit secrets.")
